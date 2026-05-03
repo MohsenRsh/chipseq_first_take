@@ -1,0 +1,257 @@
+---
+title: "Merkel_ChIP-seq_MohsenRastgooShahrestani"
+author: "Mohsen Rastgoo Shahrestani"
+date: "2024-11-21"
+output: html_document
+---
+
+1. Load the following libraries:
+```{r}
+library(GenomicFeatures)
+library(GenomicRanges)
+library(org.Hs.eg.db)
+library(ggplot2)
+library(ChIPseeker)
+
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+txdb <- TxDb.Hsapiens.UCSC.hg19.knownGene
+
+library(clusterProfiler)
+library(ReactomePA)
+```
+
+2) Access the information for hg19 ChIP-seq dataset of Merkel cell polyomavirus
+transcription factors in GEO database ( https://www.ncbi.nlm.nih.gov/geo/ ) using
+getGEOInfo.
+```{r}
+hg19 <- getGEOInfo(genome = "hg19", simplify = T)
+```
+
+3) you have to look for the GSM ids from series GSE69877, and keep the ones for
+“ST-HA_ChIP-seq”, “EP400_ChIP-seq rep1” and “Max_ChIP-seq rep1”. Download
+them using downloadGSMbedFiles.
+Those were;
+ST-HA_ChIP-seq <- GSM1711856
+EP400_ChIP-seq rep1 <- GSM1711857
+Max_ChIP-seq rep1 <- GSM1711858
+
+```{r}
+target_gsms <- c("GSM1711856", "GSM1711857", "GSM1711858")
+```
+
+```{r}
+downloadGSMbedFiles(GSM = target_gsms, destDir = getwd())
+```
+
+4) Create a list called files with the paths of the data from the Merkel cell polyomavirus
+dataset
+
+```{r}
+myfiles <- list(STHA = "D:/Molecular Biology/3rdSemester/Integrative Biology/Practicals/GSM1711856_STHA_1.peaks_peaks.bed.gz",
+                P400 = "D:/Molecular Biology/3rdSemester/Integrative Biology/Practicals/GSM1711857_p400_1.peaks_peaks.bed.gz",
+                MAX = "D:/Molecular Biology/3rdSemester/Integrative Biology/Practicals/GSM1711858_MAX_1.peaks_peaks.bed.gz")
+print(myfiles)
+```
+
+```{r}
+STHApeak <- readPeakFile(myfiles[[1]])
+p400peak <- readPeakFile(myfiles[[2]])
+Maxpeak <- readPeakFile(myfiles[[3]])
+```
+
+1. ChIP profiling
+Look at the data for each single TF:
+● Look at the GRanges objects. How many peaks are there? Which TF has the highest
+number of peaks?
+```{r}
+num_peaks_STHA <- length(STHApeak)
+num_peaks_p400 <- length(p400peak)
+num_peaks_MAX <- length(Maxpeak)
+peak_counts <- c(STHA = num_peaks_STHA, p400 = num_peaks_p400, MAX = num_peaks_MAX)
+most_peaks <- names(which.max(peak_counts))
+cat("TF with the highest number of peaks:", most_peaks, "\n")
+```
+
+● How long are peaks on average? Explore the GRanges slots (you can access slots
+with “@”).
+
+```{r}
+lengths_STHA <- STHApeak@ranges@width
+lengths_p400 <- p400peak@ranges@width
+lengths_MAX <- Maxpeak@ranges@width
+
+mean_length_STHA <- mean(lengths_STHA)
+mean_length_p400 <- mean(lengths_p400)
+mean_length_MAX <- mean(lengths_MAX)
+print(c(mean_length_STHA, mean_length_p400, mean_length_MAX))
+```
+
+ChIP peaks coverage plot:
+● How are peaks located over the whole genome? Provide a plot to visualize this
+information.
+```{r}
+covplot(STHApeak, weightCol = "V5", title = "STHApeak Coverage")
+covplot(p400peak, weightCol = "V5", title = "p400peak Coverage")
+covplot(Maxpeak, weightCol = "V5", title = "Maxpeak Coverage")
+```
+
+Profile of ChIP peaks binding to TSS/different regions:
+● Detect the ChIP peaks binding to TSS regions. Generate the tagMatrix objects
+(maybe, it is better to keep TFs together and create a tagMatrix list, you may use
+lapply to do it quickly)
+```{r}
+subset_peaks <- list(
+  STHA = STHApeak[sample(1:length(STHApeak), size = 1000)],
+  p400 = p400peak[sample(1:length(p400peak), size = 1000)],
+  MAX = Maxpeak[sample(1:length(Maxpeak), size = 1000)]
+)
+
+tagMatrix_list <- lapply(subset_peaks, function(peaks) {
+  getTagMatrix(peaks, TxDb = txdb, by = "gene", type = "start_site", upstream = 3000, downstream = 3000)
+})
+```
+
+
+● Detect the same ChIP peaks (i.e. generate another tagMatrix list) using binning
+method (use parameter nbin).
+```{r}
+binned_tagMatrix_list <- lapply(subset_peaks, function(peaks) {
+  getTagMatrix(peaks, TxDb = txdb, by = "gene", type = "start_site", upstream = 3000, downstream = 3000, nbin = 800)
+})
+
+```
+
+● Detect the ChIP peaks (i.e. generate another tagMatrix list) binding to a different
+region of your choice.
+```{r}
+tagMatrix_body_list <- lapply(subset_peaks, function(peaks) {
+  getTagMatrix(peaks, TxDb = txdb, by = "gene", type = "body", nbin = 50)
+})
+```
+
+● Plot the heatmap of the tagMatrix for TSS regions. Is it possible to plot more heatmaps
+at the same time?
+I used a subset for this question since it took a lot of time for the original data and I could not manage to do it with my laptop.
+```{r}
+
+lapply(names(tagMatrix_list), function(name) {
+  tagHeatmap(tagMatrix_list[[name]], title = paste(name, "TSS Binding Heatmap (Subset)"))
+})
+```
+
+● Plot the average profile of the tagMatrix for binning method.
+```{r}
+lapply(names(binned_tagMatrix_list), function(name) {
+  plotAvgProf(
+    binned_tagMatrix_list[[name]],
+    xlim = c(1,800),
+    title = paste(name, "Average Profile (Binned)")
+  )
+})
+```
+
+2. Peak Annotation
+
+● Annotate peaks. Also here, keep objects together inside a list as before.
+```{r}
+peak_annotations <- lapply(list(STHA = STHApeak, p400 = p400peak, MAX = Maxpeak), function(peaks) {
+  annotatePeak(peaks, TxDb = txdb, tssRegion = c(-3000, 3000), verbose = FALSE)
+})
+```
+
+Visualize Genomic Annotation:
+● Explore the annotation information using the dedicated plots.
+Pie and Bar plot;
+```{r}
+plotAnnoPie(peak_annotations[[1]])
+plotAnnoPie(peak_annotations[[2]])
+plotAnnoPie(peak_annotations[[3]])
+```
+
+```{r}
+plotAnnoBar(peak_annotations[[1]])
+plotAnnoBar(peak_annotations[[2]])
+plotAnnoBar(peak_annotations[[3]])
+```
+
+3. ChIP peak data set comparison
+
+Functional profiles comparison:
+● Collect the annotated genes and keep them in a list by datasets.
+```{r}
+genes = lapply(peak_annotations, function(i) as.data.frame(i)$geneId)
+names(genes) = sub("_", "\n", names(genes))
+```
+
+● Annotated genes can be analyzed by enrichment analyses. Compare the KEGG
+pathways across the ChIP-Seq experiments (use function compareCluster).
+● Provide the plot useful to visualize the enrichment analysis results.
+```{r}
+compKEGG <- compareCluster(geneCluster   = genes,
+                         fun           = "enrichKEGG",
+                         pvalueCutoff  = 0.05,
+                         pAdjustMethod = "BH")
+dotplot(compKEGG, showCategory = 15, title = "KEGG Pathway Enrichment Analysis")
+```
+
+Overlap of annotated genes:
+● Provide a plot to visualize the overlaps between the annotated genes.
+```{r}
+vennplot(genes)
+```
+
+4. Statistical testing of ChIP seq overlap
+
+Peak overlap enrichment analysis:
+● Detect the peak overlap enrichment using as queryPeak “MAX_1” versus the others.
+```{r}
+queryPeak <- peak_annotations[["MAX"]]  
+targetPeaks <- peak_annotations[c("STHA", "p400")]
+
+
+enrichPeakOverlap(
+  queryPeak = queryPeak@anno,  
+  targetPeak = lapply(targetPeaks, function(x) x@anno),  
+  TxDb = txdb,
+  pAdjustMethod = "BH",
+  nShuffle = 50,
+  chainFile = NULL,
+  verbose = FALSE
+)
+```
+
+5. Define the cell signaling pathways impacted by ST protein of the virus
+
+Look at the genes annotated in all the three TFs and perform an enrichment analysis on the
+Reactome enrichment pathways:
+● Intersect the annotated genes from the three TFs (STHA, EP400 e MAX).
+```{r}
+genes <- lapply(peak_annotations, function(i) {
+  unique(as.data.frame(i)$geneId)
+})
+common_genes <- Reduce(intersect, genes)  
+cat("Number of common genes:", length(common_genes), "\n")
+```
+
+● Use enrichPathway to perform the enrichment analysis on the Reactome pathway
+database.
+```{r}
+library(ReactomePA)
+reactome_results <- enrichPathway(
+  gene = common_genes,
+  organism = "human",  
+  pvalueCutoff = 0.05,
+  readable = TRUE
+)
+
+head(as.data.frame(reactome_results))
+```
+
+● Visualize the dotplot of the results.
+```{r}
+library(clusterProfiler)
+dotplot(reactome_results, showCategory = 10, title = "Reactome Pathway Enrichment")
+```
+
+
+
